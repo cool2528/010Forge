@@ -1,9 +1,10 @@
 # 010Forge - 010 Editor 一键补丁工具 / One-Click Patcher
 
-[中文](#中文) | [English](#english)
+[中文](#zh-cn) | [English](#english)
 
 ---
 
+<a id="zh-cn"></a>
 ## 中文
 
 单文件 Win32 GUI 工具，把 010 Editor 的**激活**和**汉化**打包成一键操作。
@@ -44,7 +45,7 @@ cd tool
 cmake -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
-产物：`build/bin/010Forge.exe`（约 510KB，已含全部资源）
+产物：`build/bin/010Forge.exe`（约 437KB，已含全部资源）
 
 ### 使用
 1. 打开 `010Forge.exe`（自动按系统语言显示中文或英文）
@@ -63,6 +64,7 @@ cmake --build build
 
 ---
 
+<a id="english"></a>
 ## English
 
 010Forge is a single-file Win32 GUI tool that bundles 010 Editor's **activation** and **Chinese localization** into one-click operations.
@@ -103,7 +105,7 @@ cd tool
 cmake -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ```
-Output: `build/bin/010Forge.exe` (~510 KB, all resources embedded)
+Output: `build/bin/010Forge.exe` (~437 KB, all resources embedded)
 
 ### Usage
 1. Run `010Forge.exe` (UI language follows the OS language automatically)
