@@ -10,6 +10,10 @@ endforeach()
 # 汉化 DLL 子项目：构建产物输出到 resources/，作为本 exe 的嵌入资源
 add_subdirectory(zhcn)
 
+# DLL 劫持代理子项目（可选）：伪装成 quazip.dll，转发 API + 自动汉化。
+# 构建产物 quazip.dll 需手动部署到 010 Editor 目录（见 hijack/deploy_hijack.bat）
+add_subdirectory(hijack)
+
 add_executable(010Forge WIN32
     main.cpp
     license.cpp

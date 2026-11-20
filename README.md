@@ -57,10 +57,20 @@ cmake --build build
 7. **查看状态** → 显示当前许可证与校验结果
 8. 背景音乐 checkbox 可随时开关；「语言」按钮可切换中英文
 
+### 三种汉化加载方式
+1. **注入启动（GUI「3.启动(汉化)」）**：启动器把 zhcn.dll 注入进程，仅该次生效
+2. **DLL 劫持（推荐，全局自动）**：`hijack/` 把汉化逻辑伪装成 `quazip.dll`（程序启动必加载的 DLL），
+   转发全部 253 个 API 到 `quazip_orig.dll`，DllMain 里执行汉化 hook。
+   部署后**任何方式启动**（桌面快捷方式、文件关联、命令行）都自动中文。
+   - 安装：`hijack\deploy_hijack.bat`（自动备份原 DLL 为 quazip_orig.dll）
+   - 卸载：`hijack\uninstall_hijack.bat`（还原原 DLL）
+3. 两者可共存；劫持方式最省心，注入方式最不影响原文件
+
 ### 跨版本
 - 激活算法与注册表路径跨版本通用；新版本只需改到期年份避开 build number 门槛
 - 汉化 DLL 的 IAT hook 与字符串补丁当前绑定 v17.0.1 的具体 RVA。
   后续可改为按导入符号名动态定位 IAT、按内容搜索字符串，更新配置即可适配新版本
+- DLL 劫持依赖 `quazip.dll` 这个目标；若新版本不再带该 DLL，需换一个必加载且导出少的 DLL 重新生成 def
 
 ---
 
@@ -117,10 +127,20 @@ Output: `build/bin/010Forge.exe` (~437 KB, all resources embedded)
 7. **Check Status** → show current license and validation result
 8. Toggle BGM with the checkbox; switch language with the Language button
 
+### Three localization loading modes
+1. **Injected launch (GUI "3. Launch (CN)")**: launcher injects zhcn.dll into the process; effective for that session only
+2. **DLL hijack (recommended, global)**: `hijack/` disguises the localization logic as `quazip.dll` (a DLL loaded on every startup),
+   forwarding all 253 APIs to `quazip_orig.dll` while the DllMain runs the localization hook.
+   Once deployed, **any launch method** (desktop shortcut, file association, command line) is auto-localized.
+   - Install: `hijack\deploy_hijack.bat` (auto-backs up the original to quazip_orig.dll)
+   - Uninstall: `hijack\uninstall_hijack.bat` (restores the original DLL)
+3. Both can coexist; hijack is the most convenient, injection leaves the original files untouched
+
 ### Cross-version notes
 - The activation algorithm and registry path are version-independent; just adjust the expiry year for new builds
 - The localization DLL's IAT hooks and string patches are bound to v17.0.1 RVAs.
   Future work: locate IAT slots by import symbol name and strings by content, so a config update suffices for new versions
+- DLL hijacking targets `quazip.dll`; if a future version drops it, pick another always-loaded DLL with few exports and regenerate the def
 
 ---
 

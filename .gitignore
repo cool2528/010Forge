@@ -33,13 +33,19 @@ compile_commands.json
 *.opendb
 *.VC.db
 
-# 临时与备份
+# 临时与临时脚本（保留 hijack 的部署/卸载脚本）
 *.tmp
 *.bak
 *.swp
 *~
 *.bat
+!hijack/deploy_hijack.bat
+!hijack/uninstall_hijack.bat
 
 # 系统
 Thumbs.db
 desktop.ini
+
+# 劫持代理 DLL 构建产物（保留 def/源码）
+hijack/quazip.dll
+
