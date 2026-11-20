@@ -1,0 +1,56 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'          # 推送 v1.0 / v2.0 等 tag 时触发
+  workflow_dispatch:  # 也支持手动在 Actions 页面触发
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Configure CMake
+        run: cmake -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Verify output
+        run: |
+          if (!(Test-Path "build\bin\010Forge.exe")) { throw "Build output not found" }
+          Get-Item "build\bin\010Forge.exe" | Format-List FullName,Length,LastWriteTime
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $ver = "${{ github.ref_name }}"
+          if ($ver -eq "refs/heads/master" -or $ver -eq "") { $ver = "dev" }
+          $dir = "release"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item "build\bin\010Forge.exe" "$dir\010Forge.exe"
+          Copy-Item "README.md" "$dir\README.md"
+          Compress-Archive -Path "$dir\*" -DestinationPath "010Forge_$ver.zip" -Force
+          Get-Item "010Forge_$ver.zip" | Format-List FullName,Length
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: 010Forge_*.zip
+          generate_release_notes: true
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

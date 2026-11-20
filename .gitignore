@@ -1,0 +1,45 @@
+# CMake 构建目录与产物
+build/
+out/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+compile_commands.json
+
+# 编译中间文件
+*.obj
+*.o
+*.lib
+*.exp
+*.pdb
+*.ilk
+*.idb
+*.tlog
+*.log
+
+# 可执行文件（注意：zhcn.dll/app.ico/bgm.wav 是嵌入资源，需纳入版本控制，不忽略）
+*.exe
+# *.dll  # 不忽略，zhcn.dll 是资源源文件
+
+# Visual Studio
+.vs/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.user
+*.suo
+*.ncb
+*.opendb
+*.VC.db
+
+# 临时与备份
+*.tmp
+*.bak
+*.swp
+*~
+*.bat
+
+# 系统
+Thumbs.db
+desktop.ini
