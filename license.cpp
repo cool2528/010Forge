@@ -69,7 +69,7 @@ static unsigned int EncDate24(int days, unsigned int k) {
 static unsigned int NameHash(const std::string& name, int flag, int users, int licnum) {
     EnsureTable();
     unsigned int acc = 0;
-    int i17 = (15 * users) & 0xFF;
+    int i17 = (17 * users) & 0xFF;   // 反汇编 imul edi, r8d, 11h (17*users)，勿写成 15
     int i15 = (15 * (licnum & 0xFF)) & 0xFF;
     int c19 = 0, c7 = 0;
     for (unsigned char ch : name) {
@@ -129,6 +129,7 @@ std::string License::GenSingle(const std::string& name, int users, int licnum) {
 
 int License::Validate(const std::string& name, const std::string& serial, LicenseInfo* out) {
     unsigned char b[10]; int n = 0;
+    if (out) *out = LicenseInfo{};   // 初始化，避免校验失败时显示垃圾值
     if (!ParseSerial(serial, b, &n)) return 0;
     unsigned int crc = 0;
     int type = b[3];
