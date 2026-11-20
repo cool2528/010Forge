@@ -4,6 +4,22 @@
 
 ---
 
+## 预览 / Preview
+
+**汉化界面（DLL 劫持自动生效）/ Localized UI (auto via DLL hijack):**
+
+![localized UI](images/localized-ui.png)
+
+**一键补丁工具 / One-click patcher GUI:**
+
+![GUI tool](images/gui-tool.png)
+
+**激活状态 / Activation status:**
+
+![licensed](images/licensed-about.png)
+
+---
+
 <a id="zh-cn"></a>
 ## 中文
 
