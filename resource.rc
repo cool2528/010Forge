@@ -1,12 +1,7 @@
-#include "resource.h"
+// CMake configures the absolute, configuration-specific paths below.
+#include "@FORGE_SOURCE_RC@/resource.h"
 #include <windows.h>
-
-// 资源文件统一放 resources/ 目录（预置二进制，不由本项目 CMake 编译）
-// 应用程序图标
-IDI_APP_ICON ICON "resources\\app.ico"
-
-// 汉化 DLL（独立项目 zhcn 构建，作为二进制资源嵌入）
-IDR_ZHCN_DLL RCDATA "resources\\zhcn.dll"
-
-// 背景音乐 WAV（由 gen_assets.py 生成，作为二进制资源嵌入）
-IDR_BGM_WAV RCDATA "resources\\bgm.wav"
+IDI_APP_ICON ICON "@FORGE_SOURCE_RC@/resources/app.ico"
+IDR_QUAZIP_DLL RCDATA "@FORGE_PROXY_RC@"
+IDR_BGM_WAV RCDATA "@FORGE_SOURCE_RC@/resources/bgm.wav"
+1 RT_MANIFEST "@FORGE_SOURCE_RC@/resources/app.manifest"

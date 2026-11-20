@@ -1,28 +1,36 @@
-# CMake 构建目录与产物
+# Out-of-source CMake builds, test fixtures and packages
 build/
+build-*/
 out/
+dist/
+release/
 CMakeFiles/
 CMakeCache.txt
 cmake_install.cmake
+CTestTestfile.cmake
+Testing/
 Makefile
 compile_commands.json
+*.zip
+*.zip.sha256
 
-# 编译中间文件
+# Build products (DLLs are compiled from source, never committed)
 *.obj
 *.o
 *.lib
+*.a
 *.exp
 *.pdb
 *.ilk
 *.idb
 *.tlog
 *.log
-
-# 可执行文件（注意：zhcn.dll/app.ico/bgm.wav 是嵌入资源，需纳入版本控制，不忽略）
+*.res
+*.pch
 *.exe
-# *.dll  # 不忽略，zhcn.dll 是资源源文件
+*.dll
 
-# Visual Studio
+# IDE/local state
 .vs/
 *.sln
 *.vcxproj
@@ -32,20 +40,14 @@ compile_commands.json
 *.ncb
 *.opendb
 *.VC.db
+CMakeUserPresets.json
 
-# 临时与临时脚本（保留 hijack 的部署/卸载脚本）
+# Temporary files
 *.tmp
 *.bak
 *.swp
 *~
-*.bat
-!hijack/deploy_hijack.bat
-!hijack/uninstall_hijack.bat
+_*.bat
 
-# 系统
 Thumbs.db
 desktop.ini
-
-# 劫持代理 DLL 构建产物（保留 def/源码）
-hijack/quazip.dll
-

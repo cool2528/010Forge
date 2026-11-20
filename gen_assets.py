@@ -26,52 +26,109 @@ def make_icon():
     print("wrote", ico, os.path.getsize(ico))
     return True
 
-# ---------- 背景音乐（循环 chiptune 旋律）----------
+# ---------- 原创暗色赛博电子循环：Grid After Midnight ----------
 def make_music():
-    """生成一段 8 秒左右可循环的芯片音乐 WAV（16-bit mono 22050Hz）"""
-    sr = 11025
-    bpm = 120
+    """Original synth/drums, no samples or third-party soundtrack. Pure stdlib."""
+    import random
+    import array
+    sr, bpm, bars = 22050, 100, 8
     beat = 60.0 / bpm
-    # 音符频率 (A4=440)
-    def note(n):
-        # n: MIDI note number
-        return 440.0 * (2.0 ** ((n - 69) / 12.0))
-    # 一段循环的旋律（每拍一个音符，MIDI 音高），8 小节 x 4 拍
-    melody = [
-        69, 72, 76, 72, 74, 77, 81, 77,
-        76, 72, 69, 72, 74, 76, 74, 72,
-        69, 72, 76, 79, 77, 76, 74, 72,
-        71, 74, 77, 74, 72, 69, 71, 72,
-    ]
-    dur = beat * 0.9
-    samples = []
-    for i, m in enumerate(melody):
-        f = note(m)
-        n = int(sr * dur)
-        for j in range(n):
+    seconds = bars * 4 * beat
+    size = round(sr * seconds)
+    mix = array.array('d', [0.0]) * size
+    rng = random.Random(10402026)
+    tau = math.tau
+
+    def hz(midi):
+        return 440.0 * 2 ** ((midi - 69) / 12)
+
+    def add(start, duration, synth, gain):
+        offset = round(start * sr)
+        count = round(duration * sr)
+        for j in range(count):
             t = j / sr
-            # 方波 + 轻微衰减，芯片音色
-            phase = (f * t) % 1.0
-            sq = 1.0 if phase < 0.5 else -1.0
-            env = 1.0 - (j / n) * 0.6
-            # 加一个低八度正弦做 bass
-            bass = 0.25 * math.sin(2 * math.pi * f * 0.5 * t)
-            v = (sq * 0.18 + bass) * env
-            samples.append(max(-1.0, min(1.0, v)))
-    # 转成 16-bit PCM
-    data = bytearray()
-    for s in samples:
-        val = int(s * 22000)
-        data += struct.pack('<h', val)
-    wav = os.path.join(OUT, 'bgm.wav')
-    with wave.open(wav, 'wb') as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes(bytes(data))
-    print("wrote", wav, len(data)+44, "bytes,", round(len(samples)/sr, 1), "sec")
+            # Wrap delay tails so the phrase is periodic, not cut off at end.
+            mix[(offset + j) % size] += gain * synth(t, j, count)
+
+    # E-minor bass roots with ominous b6/b2 tension; eight original bars.
+    roots = [28, 28, 24, 26, 28, 31, 29, 27]
+    for bar, root in enumerate(roots):
+        start = bar * 4 * beat
+        for step in (0, 3, 6, 8, 11, 14):
+            f = hz(root if step < 11 else root + 12)
+            def bass(t, j, count, f=f):
+                attack = min(1.0, t / .006)
+                env = attack * math.exp(-8 * t)
+                tone = math.sin(tau*f*t) + .24*math.sin(tau*2*f*t) + .09*math.sin(tau*3*f*t)
+                return math.tanh(1.4*tone) * env
+            add(start + step*beat/4, beat*.38, bass, .17)
+        # Detuned low pad, slow gated pump. No copied melody.
+        for interval in (12, 19, 22):
+            f = hz(root + interval)
+            def pad(t, j, count, f=f):
+                env = math.sin(math.pi * j / count)**2
+                pulse = .35 + .65*(.5-.5*math.cos(tau*t/beat))
+                return env*pulse*(math.sin(tau*f*t) + .4*math.sin(tau*f*1.003*t))
+            add(start, 4*beat, pad, .018)
+        pattern = [0, 7, 12, 15, 19, 12, 7, 22, 0, 12, 19, 15, 7, 22, 12, 7]
+        for step, interval in enumerate(pattern):
+            f = hz(root + 36 + interval)
+            def arp(t, j, count, f=f):
+                env = min(1., t/.002)*math.exp(-24*t)
+                return env*(math.sin(tau*f*t + 1.8*math.exp(-28*t)*math.sin(tau*2*f*t)))
+            when = start + step*beat/4
+            add(when, beat*.38, arp, .035 if step % 4 else .055)
+            add(when + beat*.75, beat*.38, arp, .011)
+        for pulse in range(4):
+            def kick(t, j, count):
+                phase = tau*(43*t + 2.8*(1-math.exp(-35*t)))
+                return math.sin(phase)*math.exp(-17*t) + .04*rng.uniform(-1,1)*math.exp(-140*t)
+            add(start+pulse*beat, .32, kick, .23)
+            if pulse in (1, 3):
+                def snare(t, j, count):
+                    noise = rng.uniform(-1.,1.)
+                    return (noise*.65+math.sin(tau*165*t)*.35)*math.exp(-26*t)*min(1.,t/.001)
+                add(start+pulse*beat, .18, snare, .09)
+        for tick in range(8):
+            def hat(t, j, count):
+                metallic = math.sin(tau*6700*t)*math.sin(tau*4310*t)
+                return (metallic*.55+rng.uniform(-1,1)*.45)*math.exp(-95*t)
+            add(start+tick*beat/2, .065, hat, .025 if tick % 2 else .017)
+        if bar in (3, 7):
+            for tick in range(6):
+                f = hz(96 - tick*3)
+                def glitch(t, j, count, f=f):
+                    return math.sin(tau*f*t)*math.exp(-95*t)*(1 if j % 22 < 14 else 0)
+                add(start+3*beat+tick*beat/8, .055, glitch, .016)
+
+    mean = sum(mix)/size
+    pcm = array.array('h')
+    peak, energy = 0.0, 0.0
+    for i, value in enumerate(mix):
+        fade = min(1.0, i/(sr*.004), (size-1-i)/(sr*.004))
+        sample = .82*math.tanh((value-mean)*1.25)*max(0., fade)
+        peak = max(peak, abs(sample))
+        energy += sample*sample
+        pcm.append(round(sample*32767))
+    import sys
+    if sys.byteorder != 'little':
+        pcm.byteswap()
+    path = os.path.join(OUT, 'bgm.wav')
+    with wave.open(path, 'wb') as wav:
+        wav.setparams((1, 2, sr, size, 'NONE', 'not compressed'))
+        wav.writeframes(pcm.tobytes())
+    rms = math.sqrt(energy/size)
+    assert peak < .83 and 0.025 < rms < .25
+    assert pcm[0] == 0 and pcm[-1] == 0
+    print('Grid After Midnight | %.1f s | %d Hz | peak %.3f | RMS %.3f | %d bytes'
+          % (seconds, sr, peak, rms, os.path.getsize(path)))
     return True
 
 if __name__ == '__main__':
-    make_icon()
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--music-only', action='store_true')
+    args = parser.parse_args()
+    if not args.music_only:
+        make_icon()
     make_music()

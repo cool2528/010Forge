@@ -18,8 +18,8 @@ static int HexVal(char c) {
     if (c >= '0' && c <= '9') return c - '0';
     if (c == 'l' || c == 'L') return 1;
     if (c == 'o' || c == 'O') return 0;
-    if (c >= 'a' && c <= 'f') return c - '87';
-    if (c >= 'A' && c <= 'F') return c - '55';
+    if (c >= 'a' && c <= 'f') return c - 87;
+    if (c >= 'A' && c <= 'F') return c - 55;
     return 0;
 }
 

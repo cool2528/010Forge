@@ -1,352 +1,380 @@
-// 010 Editor 一键补丁工具 (Win32 API, Unicode, 中英双语)
-// 单 exe：内嵌汉化 DLL + 图标 + 背景音乐；内置注入器，零外部依赖
+// 010Forge v4.0: single-file Win32 UI, verified localization deployment.
 #include <windows.h>
 #include <commctrl.h>
 #include <mmsystem.h>
-#include <string>
-#include <vector>
+#include <shellapi.h>
 #include <cstdio>
 #include <ctime>
+#include <filesystem>
+#include <string>
+#include <vector>
+#include "deployment.h"
 #include "license.h"
 #include "resource.h"
+#include "ui_text.h"
+#include "version.h"
 
-#pragma comment(lib, "comctl32.lib")
-#pragma comment(lib, "advapi32.lib")
-#pragma comment(lib, "shell32.lib")
-#pragma comment(lib, "winmm.lib")
+namespace ui = forge::ui;
+namespace fs = std::filesystem;
+static HINSTANCE g_instance{};
+static HWND g_window{};
+static HFONT g_font{};
+static UINT g_dpi = 96;
+static bool g_music = true;
+static ui::Language g_language = ui::Language::English;
 
-// ---------- 控件 ID ----------
-#define IDC_EDIT_NAME      1001
-#define IDC_EDIT_YEAR      1002
-#define IDC_BTN_SCAN       1101
-#define IDC_BTN_ACTIVATE   1102
-#define IDC_BTN_DEPLOY     1103
-#define IDC_BTN_LAUNCH     1104
-#define IDC_BTN_STATUS     1105
-#define IDC_BTN_EXIT       1106
-#define IDC_EDIT_PATH      1004
-#define IDC_LIST_LOG       1201
-#define IDC_CHK_MUSIC      1401
-#define IDC_BTN_LANG       1402
-
-static HINSTANCE g_hInst = nullptr;
-static HWND g_hWnd = nullptr;
-static std::wstring g_installDir;
-static bool g_musicOn = true;
-static int  g_lang = 0;   // 0=English, 1=中文
-
-// ---------- 双语 ----------
 static const wchar_t* T(const wchar_t* en, const wchar_t* zh) {
-    return g_lang == 1 ? zh : en;
-}
-static void DetectLanguage() {
-    LANGID lid = GetUserDefaultUILanguage();
-    g_lang = (PRIMARYLANGID(lid) == LANG_CHINESE) ? 1 : 0;
-}
-
-// ---------- 工具函数 ----------
-static void LogRaw(const wchar_t* s) {
-    HWND hList = GetDlgItem(g_hWnd, IDC_LIST_LOG);
-    if (hList) {
-        SendMessageW(hList, LB_ADDSTRING, 0, (LPARAM)s);
-        SendMessageW(hList, LB_SETCURSEL, SendMessageW(hList, LB_GETCOUNT, 0, 0) - 1, 0);
-    }
+    return ui::Text(g_language, en, zh);
 }
 static void Log(const wchar_t* en, const wchar_t* zh) {
-    LogRaw(T(en, zh));
+    const HWND list = GetDlgItem(g_window, ui::Log);
+    SendMessageW(list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(T(en, zh)));
+    const LRESULT count = SendMessageW(list, LB_GETCOUNT, 0, 0);
+    SendMessageW(list, LB_SETCURSEL, count - 1, 0);
 }
-template<typename... Args>
-static void LogF(const wchar_t* enFmt, const wchar_t* zhFmt, Args... args) {
-    wchar_t buf[1024];
-    swprintf_s(buf, 1024, T(enFmt, zhFmt), args...);
-    LogRaw(buf);
+template<class... A> static void LogF(const wchar_t* en, const wchar_t* zh, A... args) {
+    wchar_t buffer[2048]{};
+    _snwprintf_s(buffer, _countof(buffer), _TRUNCATE, T(en, zh), args...);
+    Log(buffer, buffer);
 }
-
-static std::wstring GetModuleDir() {
-    wchar_t p[MAX_PATH]; GetModuleFileNameW(nullptr, p, MAX_PATH);
-    std::wstring s(p); size_t i = s.find_last_of(L"\\/");
-    return i == std::wstring::npos ? s : s.substr(0, i);
+static void LogError(DWORD error) {
+    wchar_t* text = nullptr;
+    FormatMessageW(FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM |
+                   FORMAT_MESSAGE_IGNORE_INSERTS, nullptr, error,
+                   MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT), reinterpret_cast<LPWSTR>(&text), 0, nullptr);
+    LogF(L"[ERROR] Windows error %lu: %s", L"[错误] Windows 错误 %lu：%s", error, text ? text : L"");
+    if (text) LocalFree(text);
+    if (error == ERROR_SHARING_VIOLATION || error == ERROR_LOCK_VIOLATION)
+        Log(L"Save your work and close 010 Editor, then retry. No process was terminated.",
+            L"请保存工作并关闭 010 Editor 后重试。本工具未终止任何进程。");
+    else if (error == ERROR_ACCESS_DENIED)
+        Log(L"The directory is not writable. You may run this tool as administrator.",
+            L"目录写入权限不足，可手动以管理员身份运行本工具。");
 }
-static bool FileExists(const std::wstring& p) {
-    return GetFileAttributesW(p.c_str()) != INVALID_FILE_ATTRIBUTES;
+static std::wstring ControlText(int id) {
+    const HWND h = GetDlgItem(g_window, id);
+    const int n = GetWindowTextLengthW(h);
+    std::vector<wchar_t> text(static_cast<size_t>(n) + 1);
+    GetWindowTextW(h, text.data(), n + 1);
+    return text.data();
 }
-
-// ---------- 资源释放 ----------
-static bool ExtractResource(int resId, const wchar_t* type, const std::wstring& outPath) {
-    HRSRC hRes = FindResourceW(g_hInst, MAKEINTRESOURCEW(resId), type);
-    if (!hRes) return false;
-    HGLOBAL hGlobal = LoadResource(g_hInst, hRes);
-    if (!hGlobal) return false;
-    DWORD size = SizeofResource(g_hInst, hRes);
-    void* data = LockResource(hGlobal);
-    if (!data || size == 0) return false;
-    HANDLE hFile = CreateFileW(outPath.c_str(), GENERIC_WRITE, 0, nullptr, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (hFile == INVALID_HANDLE_VALUE) return false;
-    DWORD written = 0;
-    WriteFile(hFile, data, size, &written, nullptr);
-    CloseHandle(hFile);
-    return written == size;
-}
-static bool ExtractDllTo(const std::wstring& dir, std::wstring& outPath) {
-    outPath = dir + L"\\zhcn.dll";
-    return ExtractResource(IDR_ZHCN_DLL, RT_RCDATA, outPath);
-}
-
-// ---------- 背景音乐 ----------
-static void PlayBgm() {
-    if (!g_musicOn) return;
-    HRSRC hRes = FindResourceW(g_hInst, MAKEINTRESOURCEW(IDR_BGM_WAV), RT_RCDATA);
-    if (!hRes) return;
-    HGLOBAL hGlobal = LoadResource(g_hInst, hRes);
-    void* data = LockResource(hGlobal);
-    PlaySoundW((LPCWSTR)data, nullptr, SND_MEMORY | SND_ASYNC | SND_LOOP);
-}
-static void StopBgm() { PlaySoundW(nullptr, nullptr, SND_ASYNC); }
-
-// ---------- 查找安装目录 ----------
-static std::wstring FindInstallDir() {
-    const wchar_t* paths[] = {
-        L"D:\\Program Files\\010 Editor",
-        L"C:\\Program Files\\010 Editor",
-        L"C:\\Program Files (x86)\\010 Editor",
-    };
-    for (auto p : paths) {
-        std::wstring d(p);
-        if (FileExists(d + L"\\010Editor.exe")) return d;
+static bool ReadTarget(fs::path& dir) {
+    std::wstring text = ControlText(ui::InstallPath);
+    const auto begin = text.find_first_not_of(L" \t\r\n");
+    const auto end = text.find_last_not_of(L" \t\r\n");
+    if (begin == std::wstring::npos) {
+        Log(L"[ERROR] Enter the installation directory.", L"[错误] 请填写安装目录。");
+        return false;
     }
-    const wchar_t* keys[] = {
-        L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\010 Editor",
-        L"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\010 Editor",
-    };
-    for (auto k : keys) {
-        HKEY hk;
-        if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, k, 0, KEY_READ, &hk) == ERROR_SUCCESS) {
-            wchar_t buf[MAX_PATH]; DWORD sz = sizeof(buf);
-            if (RegQueryValueExW(hk, L"InstallLocation", nullptr, nullptr, (BYTE*)buf, &sz) == ERROR_SUCCESS) {
-                RegCloseKey(hk);
-                std::wstring d(buf);
-                while (!d.empty() && d.back() == L'\\') d.pop_back();
-                if (FileExists(d + L"\\010Editor.exe")) return d;
-            } else RegCloseKey(hk);
+    text = text.substr(begin, end - begin + 1);
+    if (text.size() > 1 && text.front() == L'\"' && text.back() == L'\"')
+        text = text.substr(1, text.size() - 2);
+    dir = fs::path(text).lexically_normal();
+    std::error_code ec;
+    if (!dir.is_absolute() || !fs::is_directory(dir, ec)) {
+        Log(L"[ERROR] Select an existing absolute directory.", L"[错误] 请填写已存在的绝对目录路径。");
+        return false;
+    }
+    return true;
+}
+static forge::Bytes EmbeddedProxy() {
+    const HRSRC resource = FindResourceW(g_instance, MAKEINTRESOURCEW(IDR_QUAZIP_DLL), RT_RCDATA);
+    if (!resource) return {};
+    const HGLOBAL loaded = LoadResource(g_instance, resource);
+    const auto data = static_cast<const std::uint8_t*>(LockResource(loaded));
+    const DWORD size = SizeofResource(g_instance, resource);
+    return data ? forge::Bytes(data, data + size) : forge::Bytes{};
+}
+static forge::Deployment MakeDeployment() {
+    return forge::Deployment(EmbeddedProxy(), forge::SupportedPolicy());
+}
+static bool RegularFile(const fs::path& path) {
+    const DWORD a = GetFileAttributesW(path.c_str());
+    return a != INVALID_FILE_ATTRIBUTES && !(a & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT));
+}
+static std::wstring Environment(const wchar_t* name) {
+    const DWORD size = GetEnvironmentVariableW(name, nullptr, 0);
+    if (!size) return {};
+    std::vector<wchar_t> result(size);
+    GetEnvironmentVariableW(name, result.data(), size);
+    return result.data();
+}
+static void OnScan() {
+    std::vector<fs::path> candidates = {L"D:\\Program Files\\010 Editor", L"C:\\Program Files\\010 Editor"};
+    for (const wchar_t* var : {L"ProgramFiles", L"ProgramFiles(x86)"}) {
+        const auto value = Environment(var);
+        if (!value.empty()) candidates.emplace_back(fs::path(value) / L"010 Editor");
+    }
+    // Only local, exact registry keys. No worker thread with a stack context.
+    for (HKEY root : {HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE}) {
+        for (const wchar_t* key : {
+            L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\010 Editor",
+            L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\010 Editor_is1",
+            L"SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\010 Editor_is1"}) {
+            wchar_t value[32768]{};
+            DWORD size = sizeof(value);
+            if (RegGetValueW(root, key, L"InstallLocation", RRF_RT_REG_SZ,
+                             nullptr, value, &size) == ERROR_SUCCESS)
+                candidates.emplace_back(value);
         }
     }
-    return L"";
-}
-
-// ---------- 注册表许可 ----------
-static bool WriteLicense(const std::string& nameUtf8, const std::string& serial) {
-    HKEY hk;
-    LONG r = RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\SweetScape\\010 Editor", 0, KEY_SET_VALUE, &hk);
-    if (r != ERROR_SUCCESS)
-        r = RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\SweetScape\\010 Editor", 0, nullptr, 0, KEY_SET_VALUE, nullptr, &hk, nullptr);
-    if (r != ERROR_SUCCESS) return false;
-    int n = MultiByteToWideChar(CP_UTF8, 0, nameUtf8.c_str(), -1, nullptr, 0);
-    std::vector<wchar_t> wn(n); MultiByteToWideChar(CP_UTF8, 0, nameUtf8.c_str(), -1, wn.data(), n);
-    int m = MultiByteToWideChar(CP_UTF8, 0, serial.c_str(), -1, nullptr, 0);
-    std::vector<wchar_t> ws(m); MultiByteToWideChar(CP_UTF8, 0, serial.c_str(), -1, ws.data(), m);
-    RegSetValueExW(hk, L"Name", 0, REG_SZ, (BYTE*)wn.data(), n * sizeof(wchar_t));
-    RegSetValueExW(hk, L"Password", 0, REG_SZ, (BYTE*)ws.data(), m * sizeof(wchar_t));
-    RegSetValueExW(hk, L"Hidden", 0, REG_SZ, (BYTE*)L"false", 6 * sizeof(wchar_t));
-    std::time_t now = std::time(nullptr);
-    long long days = (now / 86400) + 2440588 + 1;
-    wchar_t jd[32]; swprintf_s(jd, 32, L"%lld", days);
-    RegSetValueExW(hk, L"LastDate", 0, REG_SZ, (BYTE*)jd, (DWORD)((wcslen(jd)+1) * sizeof(wchar_t)));
-    RegCloseKey(hk);
-    return true;
-}
-static bool ReadLicense(std::wstring& name, std::wstring& serial) {
-    HKEY hk;
-    if (RegOpenKeyExW(HKEY_CURRENT_USER, L"Software\\SweetScape\\010 Editor", 0, KEY_READ, &hk) != ERROR_SUCCESS)
-        return false;
-    auto rd = [&](const wchar_t* k, std::wstring& o) {
-        wchar_t b[512]; DWORD sz = sizeof(b); o.clear();
-        if (RegQueryValueExW(hk, k, nullptr, nullptr, (BYTE*)b, &sz) == ERROR_SUCCESS) o = b;
-    };
-    rd(L"Name", name); rd(L"Password", serial);
-    RegCloseKey(hk);
-    return !serial.empty();
-}
-static void KillAll() { system("taskkill /F /IM 010Editor.exe >nul 2>&1"); Sleep(300); }
-
-// ---------- 内置注入启动器 ----------
-static bool LaunchWithDll() {
-    if (g_installDir.empty()) { Log(L"[ERROR] Install dir not found", L"[错误] 未找到安装目录"); return false; }
-    KillAll();
-    std::wstring dllPath;
-    if (!ExtractDllTo(g_installDir, dllPath)) { Log(L"[ERROR] Failed to extract zhcn.dll", L"[错误] 释放 zhcn.dll 失败"); return false; }
-    Log(L"[OK] zhcn.dll extracted", L"[OK] 已释放 zhcn.dll 到安装目录");
-    std::wstring exe = g_installDir + L"\\010Editor.exe";
-    if (!FileExists(exe)) { LogF(L"[ERROR] Not found: %s", L"[错误] 找不到: %s", exe.c_str()); return false; }
-    STARTUPINFOW si = {}; si.cb = sizeof(si);
-    PROCESS_INFORMATION pi = {};
-    std::wstring cmd = exe; std::vector<wchar_t> buf(cmd.begin(), cmd.end()); buf.push_back(0);
-    if (!CreateProcessW(exe.c_str(), buf.data(), nullptr, nullptr, FALSE, CREATE_SUSPENDED, nullptr, g_installDir.c_str(), &si, &pi)) {
-        LogF(L"[ERROR] CreateProcess failed: %lu", L"[错误] 创建进程失败: %lu", GetLastError()); return false;
+    for (const auto& dir : candidates) {
+        if (RegularFile(dir / L"010Editor.exe")) {
+            SetDlgItemTextW(g_window, ui::InstallPath, dir.c_str());
+            LogF(L"[OK] Found directory: %s", L"[OK] 找到安装目录：%s", dir.c_str());
+            return;
+        }
     }
-    SIZE_T bytes = (dllPath.size()+1) * sizeof(wchar_t);
-    LPVOID remote = VirtualAllocEx(pi.hProcess, nullptr, bytes, MEM_COMMIT, PAGE_READWRITE);
-    if (!remote) { TerminateProcess(pi.hProcess,1); Log(L"[ERROR] VirtualAllocEx failed", L"[错误] VirtualAllocEx 失败"); return false; }
-    WriteProcessMemory(pi.hProcess, remote, dllPath.c_str(), bytes, nullptr);
-    HMODULE k32 = GetModuleHandleW(L"kernel32.dll");
-    auto pLoad = (LPTHREAD_START_ROUTINE)GetProcAddress(k32, "LoadLibraryW");
-    HANDLE th = CreateRemoteThread(pi.hProcess, nullptr, 0, pLoad, remote, 0, nullptr);
-    if (!th) { VirtualFreeEx(pi.hProcess,remote,0,MEM_RELEASE); TerminateProcess(pi.hProcess,1); Log(L"[ERROR] Inject failed", L"[错误] 注入失败"); return false; }
-    WaitForSingleObject(th, INFINITE); CloseHandle(th);
-    VirtualFreeEx(pi.hProcess, remote, 0, MEM_RELEASE);
-    ResumeThread(pi.hThread);
-    LogF(L"[OK] Started PID=%lu (Chinese patch injected)", L"[OK] 已启动 PID=%lu（汉化已注入）", pi.dwProcessId);
-    CloseHandle(pi.hThread); CloseHandle(pi.hProcess);
-    return true;
-}
-
-// ---------- 按钮处理 ----------
-static void OnScan() {
-    g_installDir = FindInstallDir();
-    SetDlgItemTextW(g_hWnd, IDC_EDIT_PATH, g_installDir.c_str());
-    if (!g_installDir.empty()) LogF(L"[OK] Install dir: %s", L"[OK] 找到安装目录: %s", g_installDir.c_str());
-    else Log(L"[ERROR] Install dir not found, fill it manually", L"[错误] 未找到安装目录，请手动填写");
-}
-static void OnActivate() {
-    wchar_t wn[256], wy[32];
-    GetDlgItemTextW(g_hWnd, IDC_EDIT_NAME, wn, 256);
-    GetDlgItemTextW(g_hWnd, IDC_EDIT_YEAR, wy, 32);
-    int year = _wtoi(wy); if (year < 2026) year = 2050;
-    int n = WideCharToMultiByte(CP_UTF8, 0, wn, -1, nullptr, 0, nullptr, nullptr);
-    std::vector<char> u8(n); WideCharToMultiByte(CP_UTF8, 0, wn, -1, u8.data(), n, nullptr, nullptr);
-    std::string name(u8.data());
-    int days = License::DaysForYear(year);
-    std::string serial = License::GenSite(name, 500, days);
-    LicenseInfo info; int st = License::Validate(name, serial, &info);
-    LogF(L"Serial: %S", L"生成: %S", serial.c_str());
-    LogF(L"Name=%s Expiry=%d-01-01 Verify=%d", L"用户名=%s 到期=%d-01-01 校验=%d", wn, year, st);
-    if (WriteLicense(name, serial)) Log(L"[OK] Written to registry (effective after restart)", L"[OK] 已写入注册表（重启程序生效）");
-    else Log(L"[ERROR] Failed to write registry", L"[错误] 写注册表失败");
+    Log(L"[NOTE] Installation not found. Enter its directory above.",
+        L"[提示] 未找到安装目录，请在上方手动填写。");
 }
 static void OnDeploy() {
-    if (g_installDir.empty()) { Log(L"[ERROR] Install dir not found", L"[错误] 未找到安装目录"); return; }
-    KillAll();
-    std::wstring dst;
-    if (ExtractDllTo(g_installDir, dst)) LogF(L"[OK] zhcn.dll deployed to %s", L"[OK] zhcn.dll 已部署到 %s", dst.c_str());
-    else Log(L"[ERROR] Deploy failed", L"[错误] 部署失败");
+    fs::path dir;
+    if (!ReadTarget(dir)) return;
+    const auto result = MakeDeployment().Install(dir);
+    if (!result.ok) {
+        LogError(result.error);
+        if (result.changed)
+            Log(L"The target changed during replacement. Check status and use Restore; the verified backup is retained.",
+                L"替换期间目标状态发生变化，请检查状态后使用还原；校验后的原件备份仍保留。");
+        return;
+    }
+    Log(result.changed ? L"[OK] Proxy installed; the verified original is kept in quazip_orig.dll."
+                       : L"[OK] The same localization proxy is already installed.",
+        result.changed ? L"[OK] 代理已安装，原件已校验并备份为 quazip_orig.dll。"
+                       : L"[OK] 已安装相同汉化代理，无需重复替换。");
+    Log(L"The desktop shortcut and direct launches now use the same localized installation.",
+        L"此后桌面快捷方式、文件关联及直接启动都会加载同一汉化代理。");
+}
+static void OnRestore() {
+    fs::path dir;
+    if (!ReadTarget(dir)) return;
+    const auto result = MakeDeployment().Restore(dir);
+    if (!result.ok) {
+        LogError(result.error);
+        if (result.changed)
+            Log(L"The target changed during replacement. Check status and use Restore; the verified backup is retained.",
+                L"替换期间目标状态发生变化，请检查状态后使用还原；校验后的原件备份仍保留。");
+        return;
+    }
+    Log(result.changed ? L"[OK] Original DLL restored; verified backup retained."
+                       : L"[OK] Original DLL already present; nothing to restore.",
+        result.changed ? L"[OK] 原版 DLL 已还原，校验后的备份仍保留。"
+                       : L"[OK] 当前已是原版 DLL，无需还原。");
+    Log(L"License and personal settings were not changed.", L"许可证和个人配置未改动。");
+}
+static void OnLaunch() {
+    fs::path dir;
+    if (!ReadTarget(dir)) return;
+    const auto inspection = MakeDeployment().Inspect(dir);
+    if (!MakeDeployment().HostSupported(dir) ||
+        (inspection.state != forge::PatchState::Original &&
+         inspection.state != forge::PatchState::Installed && inspection.state != forge::PatchState::OlderProxy)) {
+        Log(L"[ERROR] Verify or restore the installation before launch.", L"[错误] 请先检查或还原安装目录，再启动。");
+        LogError(inspection.error ? inspection.error : ERROR_REVISION_MISMATCH);
+        return;
+    }
+    const auto exe = dir / L"010Editor.exe";
+    std::wstring command = L"\"" + exe.wstring() + L"\"";
+    STARTUPINFOW start{}; start.cb = sizeof(start);
+    PROCESS_INFORMATION process{};
+    if (!CreateProcessW(exe.c_str(), command.data(), nullptr, nullptr, FALSE, 0,
+                        nullptr, dir.c_str(), &start, &process)) {
+        LogError(GetLastError()); return;
+    }
+    LogF(L"[OK] Process created: PID %lu. Existing windows were not terminated.",
+         L"[OK] 已创建进程：PID %lu。现有窗口未被终止。", process.dwProcessId);
+    Log(inspection.state == forge::PatchState::Original ? L"Original DLL installed: English UI."
+                                                       : L"Verified proxy installed. A fresh process will attempt to load it; verify the UI in 010 Editor.",
+        inspection.state == forge::PatchState::Original ? L"当前安装原版 DLL，将使用英文界面。"
+                                                       : L"已安装校验通过的代理，新进程将尝试自动加载；请在 010 Editor 内核验界面。");
+    CloseHandle(process.hThread); CloseHandle(process.hProcess);
+}
+static std::string Utf8(const std::wstring& text) {
+    if (text.empty()) return {};
+    const int count = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(),
+                                         static_cast<int>(text.size()), nullptr, 0, nullptr, nullptr);
+    if (!count) return {};
+    std::string result(static_cast<size_t>(count), '\0');
+    WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, text.data(), static_cast<int>(text.size()),
+                        result.data(), count, nullptr, nullptr);
+    return result;
+}
+static bool WriteLicense(const std::wstring& name, const std::string& serial) {
+    HKEY key{};
+    DWORD error = RegCreateKeyExW(HKEY_CURRENT_USER, L"Software\\SweetScape\\010 Editor", 0,
+                    nullptr, 0, KEY_SET_VALUE, nullptr, &key, nullptr);
+    if (error) { LogError(error); return false; }
+    const std::wstring code(serial.begin(), serial.end());
+    SYSTEMTIME now{}; GetLocalTime(&now);
+    const int a = (14 - now.wMonth) / 12;
+    const int y = now.wYear + 4800 - a;
+    const int m = now.wMonth + 12 * a - 3;
+    const int julian = now.wDay + (153 * m + 2) / 5 + 365 * y + y / 4 - y / 100 + y / 400 - 32045;
+    const std::wstring date = std::to_wstring(julian);
+    auto put = [&](const wchar_t* field, const std::wstring& value) {
+        if (error == ERROR_SUCCESS)
+            error = RegSetValueExW(key, field, 0, REG_SZ,
+                         reinterpret_cast<const BYTE*>(value.c_str()),
+                         static_cast<DWORD>((value.size() + 1) * sizeof(wchar_t)));
+    };
+    put(L"Name", name); put(L"Password", code); put(L"Hidden", L"false"); put(L"LastDate", date);
+    RegCloseKey(key);
+    if (error) { LogError(error); return false; }
+    return true;
+}
+static void OnActivate() {
+    fs::path dir;
+    if (!ReadTarget(dir)) return;
+    if (!MakeDeployment().HostSupported(dir)) { LogError(ERROR_REVISION_MISMATCH); return; }
+    const auto name = ControlText(ui::UserName);
+    const auto yearText = ControlText(ui::ExpiryYear);
+    wchar_t* end{};
+    const long year = wcstol(yearText.c_str(), &end, 10);
+    if (name.empty() || name.size() > 200 || end == yearText.c_str() || *end || year < 2027 || year > 2099) {
+        Log(L"[ERROR] Enter a name and an expiry year between 2027 and 2099.",
+            L"[错误] 请填写用户名及 2027—2099 之间的年份。"); return;
+    }
+    const auto utf8 = Utf8(name);
+    const int days = License::DaysForYear(static_cast<int>(year));
+    const std::string serial = License::GenSite(utf8, 500, days);
+    LicenseInfo info{};
+    const int state = License::Validate(utf8, serial, &info);
+    if (state != 45 || info.supportDays != days) {
+        Log(L"[ERROR] Local verification failed; registry was not changed.",
+            L"[错误] 本地校验失败，注册表未改动。"); return;
+    }
+    if (WriteLicense(name, serial))
+        Log(L"[OK] Registry values written. Reopen 010 Editor to verify its status.",
+            L"[OK] 注册表写入完成，请重新打开 010 Editor 核验状态。");
 }
 static void OnStatus() {
-    std::wstring name, serial;
-    if (!ReadLicense(name, serial)) { Log(L"Status: no license found", L"当前状态: 未找到许可证"); return; }
-    LogF(L"License: %s / %s", L"授权: %s / %s", name.c_str(), serial.c_str());
-    int n = WideCharToMultiByte(CP_UTF8, 0, name.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    std::vector<char> u(n); WideCharToMultiByte(CP_UTF8, 0, name.c_str(), -1, u.data(), n, nullptr, nullptr);
-    int m = WideCharToMultiByte(CP_UTF8, 0, serial.c_str(), -1, nullptr, 0, nullptr, nullptr);
-    std::vector<char> s(m); WideCharToMultiByte(CP_UTF8, 0, serial.c_str(), -1, s.data(), m, nullptr, nullptr);
-    LicenseInfo info; int st = License::Validate(std::string(u.data()), std::string(s.data()), &info);
-    LogF(L"Verify: status=%d users=%d num=%d supportDays=%d", L"校验: 状态=%d 用户=%d 编号=%d 支持天数=%d", st, info.users, info.licnum, info.supportDays);
-}
-static void ToggleMusic(HWND hChk) {
-    g_musicOn = (SendMessageW(hChk, BM_GETCHECK, 0, 0) == BST_CHECKED);
-    if (g_musicOn) { PlayBgm(); Log(L"[OK] BGM on", L"[OK] 背景音乐已开启"); }
-    else { StopBgm(); Log(L"[OK] BGM off", L"[OK] 背景音乐已关闭"); }
-}
-
-// 刷新所有控件文本（切换语言时）
-static void RefreshUI() {
-    HICON hIcon = LoadIconW(g_hInst, MAKEINTRESOURCEW(IDI_APP_ICON));
-    if (hIcon) { SendMessageW(g_hWnd, WM_SETICON, ICON_BIG, (LPARAM)hIcon); SendMessageW(g_hWnd, WM_SETICON, ICON_SMALL, (LPARAM)hIcon); }
-    SetWindowTextW(g_hWnd, T(L"010Forge v2.0 - One-Click Patcher (Single-File)", L"010Forge v2.0 - 一键补丁工具 (单文件)"));
-    SetDlgItemTextW(g_hWnd, IDC_BTN_SCAN,     T(L"Auto Find", L"自动查找"));
-    SetDlgItemTextW(g_hWnd, IDC_EDIT_NAME,    L"Test User");
-    SetDlgItemTextW(g_hWnd, IDC_BTN_ACTIVATE, T(L"1. Activate", L"1. 一键激活"));
-    SetDlgItemTextW(g_hWnd, IDC_BTN_DEPLOY,   T(L"2. Deploy CN Patch", L"2. 部署汉化"));
-    SetDlgItemTextW(g_hWnd, IDC_BTN_LAUNCH,   T(L"3. Launch (CN)", L"3. 启动(汉化)"));
-    SetDlgItemTextW(g_hWnd, IDC_BTN_STATUS,   T(L"Check Status", L"查看状态"));
-    SetDlgItemTextW(g_hWnd, IDC_CHK_MUSIC,    T(L"BGM", L"背景音乐"));
-    SetDlgItemTextW(g_hWnd, IDC_BTN_LANG,     T(L"语言: EN", L"语言: 中文"));
-    SetDlgItemTextW(g_hWnd, IDC_BTN_EXIT,     T(L"Exit", L"退出"));
-    // 静态标签：用子窗口枚举按原文本识别较麻烦，这里重建时统一设置（通过查找子窗口）
-    // 为简化，静态文本用位置固定，切换语言时直接遍历设置
-    int i = 0;
-    const wchar_t* enLabels[] = { L"010Forge - 010 Editor One-Click Patcher", L"Install Dir:", L"Username:", L"Expiry Year:", L"Tip: Single-file, DLL embedded; Activate writes registry, CN patch via injection", L"Log:" };
-    const wchar_t* zhLabels[] = { L"010Forge - 010 Editor 一键补丁工具", L"安装目录:", L"用户名:", L"到期年份:", L"提示: 单文件版, DLL 已内嵌; 激活写注册表, 汉化靠注入", L"操作日志:" };
-    HWND child = GetWindow(g_hWnd, GW_CHILD);
-    while (child && i < 6) {
-        wchar_t cls[64]; GetClassNameW(child, cls, 64);
-        if (wcscmp(cls, L"Static") == 0) {
-            SetWindowTextW(child, T(enLabels[i], zhLabels[i]));
-            i++;
-        }
-        child = GetWindow(child, GW_HWNDNEXT);
+    fs::path dir;
+    if (!ReadTarget(dir)) return;
+    const auto inspection = MakeDeployment().Inspect(dir);
+    switch (inspection.state) {
+    case forge::PatchState::Original: Log(L"Localization: original DLL (English UI).", L"汉化状态：原版 DLL（英文界面）。"); break;
+    case forge::PatchState::Installed: Log(L"Localization: current verified proxy and original backup.", L"汉化状态：当前代理和原件备份均已校验。"); break;
+    case forge::PatchState::OlderProxy: Log(L"Localization: recognized old proxy; update is available.", L"汉化状态：已识别旧代理，可更新部署。"); break;
+    case forge::PatchState::Recoverable: Log(L"Localization: damaged/missing current DLL; verified backup can restore it.", L"汉化状态：当前 DLL 缺失或损坏，可由已校验备份恢复。"); break;
+    case forge::PatchState::MissingBackup: Log(L"Localization: proxy found but original backup is missing.", L"汉化状态：发现代理，但原件备份缺失。"); break;
+    default: Log(L"Localization: unsupported installation or conflicting files.", L"汉化状态：安装版本不匹配或文件存在冲突。"); break;
     }
+    if (!inspection.currentSha256.empty())
+        LogF(L"DLL SHA-256: %s", L"DLL SHA-256：%s", inspection.currentSha256.c_str());
+    if (inspection.error) LogError(inspection.error);
+    wchar_t name[256]{}; DWORD length = sizeof(name);
+    if (RegGetValueW(HKEY_CURRENT_USER, L"Software\\SweetScape\\010 Editor", L"Name",
+                    RRF_RT_REG_SZ, nullptr, name, &length) == ERROR_SUCCESS)
+        LogF(L"Stored license name: %s (application status is verified in 010 Editor).",
+             L"已存储的许可证名称：%s（最终状态请在 010 Editor 内核验）。", name);
 }
-static void ToggleLanguage() {
-    g_lang = g_lang ? 0 : 1;
-    RefreshUI();
-    Log(L"Language switched to English", L"语言已切换为中文");
+static void Music(bool enabled) {
+    g_music = enabled;
+    if (!enabled) { PlaySoundW(nullptr, nullptr, 0); return; }
+    const HRSRC resource = FindResourceW(g_instance, MAKEINTRESOURCEW(IDR_BGM_WAV), RT_RCDATA);
+    if (!resource) return;
+    const HGLOBAL loaded = LoadResource(g_instance, resource);
+    const void* bytes = LockResource(loaded);
+    if (bytes) PlaySoundW(reinterpret_cast<LPCWSTR>(bytes), nullptr, SND_MEMORY | SND_ASYNC | SND_LOOP | SND_NODEFAULT);
 }
-
-// ---------- 窗口过程 ----------
-static LRESULT CALLBACK WndProc(HWND h, UINT msg, WPARAM wp, LPARAM lp) {
-    switch (msg) {
-    case WM_CREATE: {
-        g_hWnd = h;
-        CreateWindowExW(0, L"Static", L"010Forge - 010 Editor One-Click Patcher", WS_CHILD|WS_VISIBLE|SS_CENTER, 20, 10, 560, 26, h, nullptr, g_hInst, nullptr);
-        CreateWindowExW(0, L"Static", L"", WS_CHILD|WS_VISIBLE, 20, 46, 80, 20, h, nullptr, g_hInst, nullptr);
-        CreateWindowExW(WS_EX_CLIENTEDGE, L"Edit", L"", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 100, 44, 440, 22, h, (HMENU)IDC_EDIT_PATH, g_hInst, nullptr);
-        CreateWindowExW(0, L"Button", L"", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 550, 43, 90, 24, h, (HMENU)IDC_BTN_SCAN, g_hInst, nullptr);
-        CreateWindowExW(0, L"Static", L"", WS_CHILD|WS_VISIBLE, 20, 80, 80, 20, h, nullptr, g_hInst, nullptr);
-        CreateWindowExW(WS_EX_CLIENTEDGE, L"Edit", L"Test User", WS_CHILD|WS_VISIBLE|ES_AUTOHSCROLL, 100, 78, 200, 22, h, (HMENU)IDC_EDIT_NAME, g_hInst, nullptr);
-        CreateWindowExW(0, L"Static", L"", WS_CHILD|WS_VISIBLE, 320, 80, 80, 20, h, nullptr, g_hInst, nullptr);
-        CreateWindowExW(WS_EX_CLIENTEDGE, L"Edit", L"2050", WS_CHILD|WS_VISIBLE|ES_NUMBER, 400, 78, 60, 22, h, (HMENU)IDC_EDIT_YEAR, g_hInst, nullptr);
-        CreateWindowExW(0, L"Button", L"", WS_CHILD|WS_VISIBLE|BS_CHECKBOX|BS_AUTOCHECKBOX, 465, 78, 80, 24, h, (HMENU)IDC_CHK_MUSIC, g_hInst, nullptr);
-        SendMessageW(GetDlgItem(h,IDC_CHK_MUSIC), BM_SETCHECK, BST_CHECKED, 0);
-        CreateWindowExW(0, L"Button", L"", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 550, 78, 90, 24, h, (HMENU)IDC_BTN_LANG, g_hInst, nullptr);
-        CreateWindowExW(0, L"Button", L"", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 20, 114, 140, 30, h, (HMENU)IDC_BTN_ACTIVATE, g_hInst, nullptr);
-        CreateWindowExW(0, L"Button", L"", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 172, 114, 140, 30, h, (HMENU)IDC_BTN_DEPLOY, g_hInst, nullptr);
-        CreateWindowExW(0, L"Button", L"", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 324, 114, 140, 30, h, (HMENU)IDC_BTN_LAUNCH, g_hInst, nullptr);
-        CreateWindowExW(0, L"Button", L"", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 476, 114, 160, 30, h, (HMENU)IDC_BTN_STATUS, g_hInst, nullptr);
-        CreateWindowExW(0, L"Static", L"", WS_CHILD|WS_VISIBLE, 20, 154, 620, 20, h, nullptr, g_hInst, nullptr);
-        CreateWindowExW(0, L"Static", L"", WS_CHILD|WS_VISIBLE, 20, 184, 100, 20, h, nullptr, g_hInst, nullptr);
-        CreateWindowExW(WS_EX_CLIENTEDGE, L"ListBox", L"", WS_CHILD|WS_VISIBLE|LBS_STANDARD, 20, 206, 610, 240, h, (HMENU)IDC_LIST_LOG, g_hInst, nullptr);
-        CreateWindowExW(0, L"Button", L"", WS_CHILD|WS_VISIBLE|BS_PUSHBUTTON, 550, 456, 80, 26, h, (HMENU)IDC_BTN_EXIT, g_hInst, nullptr);
-        RefreshUI();
-        OnScan();
-        PlayBgm();
-        Log(L"Ready. Steps: 1) Activate  2) Deploy  3) Launch  (BGM toggle above)",
-            L"工具就绪。步骤: 1)一键激活  2)部署汉化  3)启动  (背景音乐可在上方关闭)");
+static void RefreshText() {
+    const std::wstring title = L"010Forge v" + std::wstring(FORGE_VERSION_W) +
+                               T(L" - Localization utility", L" - 一键补丁工具");
+    SetWindowTextW(g_window, title.c_str());
+    for (const auto& label : ui::Labels)
+        SetDlgItemTextW(g_window, label.id, T(label.en, label.zh));
+    // User name, path and year are deliberately NOT reset by a language change.
+}
+static int Scale(int value) { return MulDiv(value, static_cast<int>(g_dpi), 96); }
+static HWND Control(const wchar_t* cls, int id, DWORD style, int x, int y, int width, int height,
+                    const wchar_t* value = L"") {
+    const DWORD extra = wcscmp(cls, L"EDIT") == 0 || wcscmp(cls, L"LISTBOX") == 0 ? WS_EX_CLIENTEDGE : 0;
+    HWND h = CreateWindowExW(extra, cls, value, WS_CHILD | WS_VISIBLE | style,
+             Scale(x), Scale(y), Scale(width), Scale(height), g_window,
+             reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
+    SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
+    return h;
+}
+static LRESULT CALLBACK WindowProc(HWND h, UINT message, WPARAM w, LPARAM l) {
+    switch (message) {
+    case WM_CREATE:
+        g_window = h;
+        g_dpi = GetDpiForWindow(h);
+        g_font = CreateFontW(-MulDiv(10, static_cast<int>(g_dpi), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE,
+                              FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                              CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
+        Control(L"STATIC", ui::Title, SS_CENTER, 16, 14, 760, 28);
+        Control(L"STATIC", ui::PathLabel, 0, 16, 59, 105, 22);
+        Control(L"EDIT", ui::InstallPath, ES_AUTOHSCROLL | WS_TABSTOP, 124, 55, 518, 28);
+        Control(L"BUTTON", ui::Scan, BS_PUSHBUTTON | WS_TABSTOP, 654, 55, 122, 28);
+        Control(L"STATIC", ui::NameLabel, 0, 16, 98, 105, 22);
+        Control(L"EDIT", ui::UserName, ES_AUTOHSCROLL | WS_TABSTOP, 124, 94, 205, 28, L"Test User");
+        Control(L"STATIC", ui::YearLabel, 0, 346, 98, 95, 22);
+        Control(L"EDIT", ui::ExpiryYear, ES_NUMBER | WS_TABSTOP, 445, 94, 70, 28, L"2050");
+        Control(L"BUTTON", ui::Music, BS_AUTOCHECKBOX | WS_TABSTOP, 532, 94, 110, 28);
+        SendDlgItemMessageW(h, ui::Music, BM_SETCHECK, g_music ? BST_CHECKED : BST_UNCHECKED, 0);
+        Control(L"BUTTON", ui::SwitchLanguage, BS_PUSHBUTTON | WS_TABSTOP, 654, 94, 122, 28);
+        for (const auto& button : {ui::Activate, ui::Deploy, ui::Launch, ui::Restore, ui::Status}) {
+            const int index = button == ui::Activate ? 0 : button == ui::Deploy ? 1 : button == ui::Launch ? 2 : button == ui::Restore ? 3 : 4;
+            Control(L"BUTTON", button, BS_PUSHBUTTON | WS_TABSTOP, 16 + index * 154, 138, 144, 36);
+        }
+        Control(L"STATIC", ui::Hint, 0, 16, 189, 760, 40);
+        Control(L"STATIC", ui::LogLabel, 0, 16, 235, 180, 22);
+        Control(L"LISTBOX", ui::Log, LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_HSCROLL | WS_TABSTOP, 16, 260, 760, 248);
+        SendDlgItemMessageW(h, ui::Log, LB_SETHORIZONTALEXTENT, Scale(1600), 0);
+        Control(L"BUTTON", ui::Exit, BS_PUSHBUTTON | WS_TABSTOP, 654, 522, 122, 32);
+        RefreshText();
+        PostMessageW(h, WM_APP + 1, 0, 0);
         return 0;
-    }
+    case WM_APP + 1:
+        OnScan(); Music(g_music);
+        Log(L"Ready. Deploy / Restore never force-close another application.",
+            L"工具就绪。部署和还原均不会强制关闭其他程序。");
+        return 0;
     case WM_COMMAND:
-        switch (LOWORD(wp)) {
-        case IDC_BTN_SCAN:     OnScan(); break;
-        case IDC_BTN_ACTIVATE: OnActivate(); break;
-        case IDC_BTN_DEPLOY:   OnDeploy(); break;
-        case IDC_BTN_LAUNCH:   LaunchWithDll(); break;
-        case IDC_BTN_STATUS:   OnStatus(); break;
-        case IDC_CHK_MUSIC:    ToggleMusic((HWND)lp); break;
-        case IDC_BTN_LANG:     ToggleLanguage(); break;
-        case IDC_BTN_EXIT:     DestroyWindow(h); break;
+        if (HIWORD(w) == BN_CLICKED) {
+            switch (LOWORD(w)) {
+            case ui::Scan: OnScan(); break;
+            case ui::Activate: OnActivate(); break;
+            case ui::Deploy: OnDeploy(); break;
+            case ui::Launch: OnLaunch(); break;
+            case ui::Restore: OnRestore(); break;
+            case ui::Status: OnStatus(); break;
+            case ui::SwitchLanguage:
+                g_language = g_language == ui::Language::Chinese ? ui::Language::English : ui::Language::Chinese;
+                RefreshText(); break;
+            case ui::Music: Music(SendDlgItemMessageW(h, ui::Music, BM_GETCHECK, 0, 0) == BST_CHECKED); break;
+            case ui::Exit: DestroyWindow(h); break;
+            }
         }
-        break;
-    case WM_DESTROY: StopBgm(); PostQuitMessage(0); break;
+        return 0;
+    case WM_DESTROY:
+        Music(false); DeleteObject(g_font); PostQuitMessage(0); return 0;
     }
-    return DefWindowProcW(h, msg, wp, lp);
+    return DefWindowProcW(h, message, w, l);
 }
-
-int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int nCmd) {
-    g_hInst = hInst;
-    DetectLanguage();  // 按系统语言自动选择
-    INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_STANDARD_CLASSES };
-    InitCommonControlsEx(&icc);
-    WNDCLASSW wc = {};
-    wc.lpfnWndProc = WndProc; wc.hInstance = hInst;
-    wc.lpszClassName = L"010ForgeClass";
-    wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
-    wc.hIcon = LoadIconW(hInst, MAKEINTRESOURCEW(IDI_APP_ICON));
-    if (!RegisterClassW(&wc)) return 1;
-    HWND h = CreateWindowExW(0, L"010ForgeClass", L"010Forge",
-                             WS_OVERLAPPEDWINDOW & ~WS_THICKFRAME & ~WS_MAXIMIZEBOX,
-                             CW_USEDEFAULT, CW_USEDEFAULT, 660, 530, nullptr, nullptr, hInst, nullptr);
-    if (!h) return 1;
-    ShowWindow(h, nCmd); UpdateWindow(h);
-    MSG msg;
-    while (GetMessageW(&msg, nullptr, 0, 0)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
-    return (int)msg.wParam;
+int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
+    g_instance = instance;
+    g_language = ui::FromLangId(GetUserDefaultUILanguage());
+    INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES};
+    InitCommonControlsEx(&controls);
+    WNDCLASSW cls{}; cls.lpfnWndProc = WindowProc; cls.hInstance = instance;
+    cls.lpszClassName = L"010ForgeClass"; cls.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+    cls.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
+    cls.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    if (!RegisterClassW(&cls)) return 1;
+    g_dpi = GetDpiForSystem();
+    const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
+    RECT rect{0, 0, Scale(792), Scale(574)};
+    AdjustWindowRectExForDpi(&rect, style, FALSE, 0, g_dpi);
+    HWND window = CreateWindowExW(0, cls.lpszClassName, L"010Forge", style, CW_USEDEFAULT, CW_USEDEFAULT,
+                                 rect.right - rect.left, rect.bottom - rect.top, nullptr, nullptr, instance, nullptr);
+    if (!window) return 1;
+    ShowWindow(window, show); UpdateWindow(window);
+    MSG msg{}; int result;
+    while ((result = GetMessageW(&msg, nullptr, 0, 0)) > 0) {
+        if (!IsDialogMessageW(window, &msg)) { TranslateMessage(&msg); DispatchMessageW(&msg); }
+    }
+    return result < 0 ? 1 : static_cast<int>(msg.wParam);
 }

@@ -1,0 +1,3 @@
+#pragma once
+#define FORGE_VERSION "@PROJECT_VERSION@"
+#define FORGE_VERSION_W L"@PROJECT_VERSION@"

@@ -1,0 +1,18 @@
+foreach(key OUTPUT PROXY TEMPLATE SOURCE)
+    if(NOT DEFINED ${key})
+        message(FATAL_ERROR "Missing resource parameter: ${key}")
+    endif()
+endforeach()
+if(NOT EXISTS "${PROXY}")
+    message(FATAL_ERROR "Proxy DLL was not built: ${PROXY}")
+endif()
+set(FORGE_PROXY_RC "${PROXY}")
+set(FORGE_SOURCE_RC "${SOURCE}")
+string(REPLACE "\\" "/" FORGE_PROXY_RC "${FORGE_PROXY_RC}")
+string(REPLACE "\\" "/" FORGE_SOURCE_RC "${FORGE_SOURCE_RC}")
+get_filename_component(out_dir "${OUTPUT}" DIRECTORY)
+file(MAKE_DIRECTORY "${out_dir}")
+configure_file("${TEMPLATE}" "${OUTPUT}" @ONLY)
+# The text is unchanged if only the DLL bytes changed. Refresh the RC timestamp
+# so its resource object and the EXE are rebuilt for the new payload anyway.
+file(TOUCH "${OUTPUT}")

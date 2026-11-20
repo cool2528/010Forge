@@ -2,55 +2,91 @@ name: Build & Release
 
 on:
   push:
-    tags:
-      - 'v*'          # 推送 v1.0 / v2.0 等 tag 时触发
-  workflow_dispatch:  # 也支持手动在 Actions 页面触发
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
   build:
-    runs-on: windows-latest
-
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-
-      - name: Setup MSVC (x64)
+      - name: Setup MSVC x64
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
-
-      - name: Configure CMake
-        run: cmake -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release
-
-      - name: Build
-        run: cmake --build build --config Release
-
-      - name: Verify output
+      - name: Configure
+        run: cmake -S . -B build -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Build all targets from source
+        run: cmake --build build
+      - name: Test deployment, resources and languages
+        run: ctest --test-dir build --output-on-failure
+      - name: Package single EXE, bilingual docs and screenshots
+        id: package
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          REF_TYPE: ${{ github.ref_type }}
         run: |
-          if (!(Test-Path "build\bin\010Forge.exe")) { throw "Build output not found" }
-          Get-Item "build\bin\010Forge.exe" | Format-List FullName,Length,LastWriteTime
-
-      - name: Package
-        shell: pwsh
+          $ErrorActionPreference = 'Stop'
+          $version = if ($env:REF_TYPE -eq 'tag') { $env:REF_NAME } else { 'dev-' + '${{ github.sha }}'.Substring(0, 8) }
+          cmake --install build --prefix release --config Release
+          if ($LASTEXITCODE -ne 0) { throw 'CMake install failed' }
+          $exe = 'release/010Forge.exe'
+          if (!(Test-Path $exe)) { throw 'Missing release EXE' }
+          foreach ($img in @('localized-ui.png', 'gui-tool.png', 'licensed-about.png')) {
+            if (!(Test-Path "release/images/$img")) { throw "Missing README image: $img" }
+          }
+          $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  010Forge.exe" | Set-Content 'release/SHA256SUMS.txt' -Encoding ascii
+          $zip = "010Forge_$version.zip"
+          Compress-Archive -Path 'release/*' -DestinationPath $zip -Force
+          $zipHash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$zipHash  $zip" | Set-Content "$zip.sha256" -Encoding ascii
+          "zip=$zip" >> $env:GITHUB_OUTPUT
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: 010Forge-windows-x64
+          path: |
+            ${{ steps.package.outputs.zip }}
+            ${{ steps.package.outputs.zip }}.sha256
+          if-no-files-found: error
+          retention-days: 14
+      - name: Check out source tree stays clean
         run: |
-          $ver = "${{ github.ref_name }}"
-          if ($ver -eq "refs/heads/master" -or $ver -eq "") { $ver = "dev" }
-          $dir = "release"
-          New-Item -ItemType Directory -Force $dir | Out-Null
-          Copy-Item "build\bin\010Forge.exe" "$dir\010Forge.exe"
-          Copy-Item "README.md" "$dir\README.md"
-          Compress-Archive -Path "$dir\*" -DestinationPath "010Forge_$ver.zip" -Force
-          Get-Item "010Forge_$ver.zip" | Format-List FullName,Length
+          if (git status --porcelain) { throw 'The build modified the source tree' }
 
-      - name: Create Release
+  release:
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download tested package
+        uses: actions/download-artifact@v4
+        with:
+          name: 010Forge-windows-x64
+          path: assets
+      - name: Publish tagged release
         uses: softprops/action-gh-release@v2
         with:
-          files: 010Forge_*.zip
+          files: |
+            assets/010Forge_*.zip
+            assets/010Forge_*.sha256
+          fail_on_unmatched_files: true
           generate_release_notes: true
           draft: false
-          prerelease: false
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
