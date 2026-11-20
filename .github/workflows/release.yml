@@ -45,7 +45,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'CMake install failed' }
           $exe = 'release/010Forge.exe'
           if (!(Test-Path $exe)) { throw 'Missing release EXE' }
-          foreach ($img in @('localized-ui.png', 'gui-tool.png', 'licensed-about.png')) {
+          foreach ($img in @('localized-ui.png', 'gui-tool.png', 'gui-tool-en.png', 'gui-tool-zh.png', 'licensed-about.png')) {
             if (!(Test-Path "release/images/$img")) { throw "Missing README image: $img" }
           }
           $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLowerInvariant()

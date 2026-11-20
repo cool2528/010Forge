@@ -3,6 +3,9 @@
 #include <commctrl.h>
 #include <mmsystem.h>
 #include <shellapi.h>
+#include <uxtheme.h>
+#include <dwmapi.h>
+#include "tracker_theme.h"
 #include <cstdio>
 #include <ctime>
 #include <filesystem>
@@ -21,7 +24,9 @@ static HWND g_window{};
 static HFONT g_font{};
 static UINT g_dpi = 96;
 static bool g_music = true;
+static bool g_preview = false;  // Isolated documentation rendering: no target I/O or playback.
 static ui::Language g_language = ui::Language::English;
+namespace skin = forge::tracker;
 
 static const wchar_t* T(const wchar_t* en, const wchar_t* zh) {
     return ui::Text(g_language, en, zh);
@@ -271,6 +276,9 @@ static void OnStatus() {
 }
 static void Music(bool enabled) {
     g_music = enabled;
+    InvalidateRect(g_window, nullptr, FALSE);
+    InvalidateRect(GetDlgItem(g_window, ui::Music), nullptr, FALSE);
+    if (g_preview) return;
     if (!enabled) { PlaySoundW(nullptr, nullptr, 0); return; }
     const HRSRC resource = FindResourceW(g_instance, MAKEINTRESOURCEW(IDR_BGM_WAV), RT_RCDATA);
     if (!resource) return;
@@ -285,56 +293,110 @@ static void RefreshText() {
     for (const auto& label : ui::Labels)
         SetDlgItemTextW(g_window, label.id, T(label.en, label.zh));
     // User name, path and year are deliberately NOT reset by a language change.
+    RedrawWindow(g_window, nullptr, nullptr, RDW_INVALIDATE | RDW_ALLCHILDREN);
 }
 static int Scale(int value) { return MulDiv(value, static_cast<int>(g_dpi), 96); }
 static HWND Control(const wchar_t* cls, int id, DWORD style, int x, int y, int width, int height,
                     const wchar_t* value = L"") {
-    const DWORD extra = wcscmp(cls, L"EDIT") == 0 || wcscmp(cls, L"LISTBOX") == 0 ? WS_EX_CLIENTEDGE : 0;
-    HWND h = CreateWindowExW(extra, cls, value, WS_CHILD | WS_VISIBLE | style,
+    const bool button = wcscmp(cls, L"BUTTON") == 0;
+    const bool edit = wcscmp(cls, L"EDIT") == 0;
+    if (button) style = (style & ~static_cast<DWORD>(BS_TYPEMASK)) | BS_OWNERDRAW;
+    HWND h = CreateWindowExW(0, cls, value, WS_CHILD | WS_VISIBLE | style | (edit ? WS_BORDER : 0),
              Scale(x), Scale(y), Scale(width), Scale(height), g_window,
              reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), g_instance, nullptr);
+    SetWindowTheme(h, L"", L"");
     SendMessageW(h, WM_SETFONT, reinterpret_cast<WPARAM>(g_font), TRUE);
     return h;
 }
 static LRESULT CALLBACK WindowProc(HWND h, UINT message, WPARAM w, LPARAM l) {
     switch (message) {
-    case WM_CREATE:
+    case WM_CREATE: {
         g_window = h;
         g_dpi = GetDpiForWindow(h);
-        g_font = CreateFontW(-MulDiv(10, static_cast<int>(g_dpi), 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE,
+        // A private/non-interactive desktop can report a different window DPI
+        // than GetDpiForSystem. Size the actual client area after HWND creation.
+        RECT actual{0, 0, Scale(832), Scale(660)};
+        AdjustWindowRectExForDpi(&actual, static_cast<DWORD>(GetWindowLongPtrW(h, GWL_STYLE)), FALSE, 0, g_dpi);
+        SetWindowPos(h, nullptr, 0, 0, actual.right-actual.left, actual.bottom-actual.top,
+                     SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+        skin::Initialize(g_dpi);
+        g_font = CreateFontW(-Scale(14), 0, 0, 0, FW_NORMAL, FALSE, FALSE,
                               FALSE, DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-                              CLEARTYPE_QUALITY, DEFAULT_PITCH, L"Segoe UI");
-        Control(L"STATIC", ui::Title, SS_CENTER, 16, 14, 760, 28);
-        Control(L"STATIC", ui::PathLabel, 0, 16, 59, 105, 22);
-        Control(L"EDIT", ui::InstallPath, ES_AUTOHSCROLL | WS_TABSTOP, 124, 55, 518, 28);
-        Control(L"BUTTON", ui::Scan, BS_PUSHBUTTON | WS_TABSTOP, 654, 55, 122, 28);
-        Control(L"STATIC", ui::NameLabel, 0, 16, 98, 105, 22);
-        Control(L"EDIT", ui::UserName, ES_AUTOHSCROLL | WS_TABSTOP, 124, 94, 205, 28, L"Test User");
-        Control(L"STATIC", ui::YearLabel, 0, 346, 98, 95, 22);
-        Control(L"EDIT", ui::ExpiryYear, ES_NUMBER | WS_TABSTOP, 445, 94, 70, 28, L"2050");
-        Control(L"BUTTON", ui::Music, BS_AUTOCHECKBOX | WS_TABSTOP, 532, 94, 110, 28);
-        SendDlgItemMessageW(h, ui::Music, BM_SETCHECK, g_music ? BST_CHECKED : BST_UNCHECKED, 0);
-        Control(L"BUTTON", ui::SwitchLanguage, BS_PUSHBUTTON | WS_TABSTOP, 654, 94, 122, 28);
+                              ANTIALIASED_QUALITY, FIXED_PITCH, L"Consolas");
+        const BOOL dark = TRUE;
+        DwmSetWindowAttribute(h, 20, &dark, sizeof(dark));
+        Control(L"STATIC", ui::Title, 0, 32, 62, 606, 20);
+        Control(L"STATIC", ui::PathLabel, 0, 32, 143, 108, 24);
+        Control(L"EDIT", ui::InstallPath, ES_AUTOHSCROLL | WS_TABSTOP, 146, 138, 500, 28);
+        Control(L"BUTTON", ui::Scan, BS_PUSHBUTTON | WS_TABSTOP, 662, 138, 138, 28);
+        Control(L"STATIC", ui::NameLabel, 0, 32, 186, 108, 24);
+        Control(L"EDIT", ui::UserName, ES_AUTOHSCROLL | WS_TABSTOP, 146, 181, 190, 28, L"Test User");
+        Control(L"STATIC", ui::YearLabel, 0, 352, 186, 92, 24);
+        Control(L"EDIT", ui::ExpiryYear, ES_NUMBER | WS_TABSTOP, 449, 181, 76, 28, L"2050");
+        Control(L"BUTTON", ui::Music, BS_PUSHBUTTON | WS_TABSTOP, 540, 181, 106, 28);
+        Control(L"BUTTON", ui::SwitchLanguage, BS_PUSHBUTTON | WS_TABSTOP, 662, 181, 138, 28);
         for (const auto& button : {ui::Activate, ui::Deploy, ui::Launch, ui::Restore, ui::Status}) {
             const int index = button == ui::Activate ? 0 : button == ui::Deploy ? 1 : button == ui::Launch ? 2 : button == ui::Restore ? 3 : 4;
-            Control(L"BUTTON", button, BS_PUSHBUTTON | WS_TABSTOP, 16 + index * 154, 138, 144, 36);
+            Control(L"BUTTON", button, BS_PUSHBUTTON | WS_TABSTOP, 32 + index * 156, 262, 144, 38);
         }
-        Control(L"STATIC", ui::Hint, 0, 16, 189, 760, 40);
-        Control(L"STATIC", ui::LogLabel, 0, 16, 235, 180, 22);
-        Control(L"LISTBOX", ui::Log, LBS_NOINTEGRALHEIGHT | WS_VSCROLL | WS_HSCROLL | WS_TABSTOP, 16, 260, 760, 248);
+        Control(L"STATIC", ui::Hint, 0, 32, 313, 768, 34);
+        Control(L"STATIC", ui::LogLabel, 0, 32, 369, 236, 22);
+        Control(L"LISTBOX", ui::Log, LBS_OWNERDRAWFIXED | LBS_HASSTRINGS | LBS_NOINTEGRALHEIGHT |
+                WS_VSCROLL | WS_HSCROLL | WS_TABSTOP, 32, 396, 768, 176);
         SendDlgItemMessageW(h, ui::Log, LB_SETHORIZONTALEXTENT, Scale(1600), 0);
-        Control(L"BUTTON", ui::Exit, BS_PUSHBUTTON | WS_TABSTOP, 654, 522, 122, 32);
+        Control(L"BUTTON", ui::Exit, BS_PUSHBUTTON | WS_TABSTOP, 662, 616, 138, 28);
         RefreshText();
         PostMessageW(h, WM_APP + 1, 0, 0);
         return 0;
+    }
+    case WM_PAINT:
+        skin::Paint(h, g_font, g_music, FORGE_VERSION_W); return 0;
+    case WM_ERASEBKGND:
+        return 1;
+    case WM_CTLCOLORSTATIC: {
+        const HDC dc = reinterpret_cast<HDC>(w);
+        const int id = GetDlgCtrlID(reinterpret_cast<HWND>(l));
+        SetTextColor(dc, id == ui::Title ? skin::Cyan : id == ui::Hint ? skin::Muted : skin::Text);
+        SetBkMode(dc, TRANSPARENT);
+        SetBkColor(dc, id == ui::Hint ? skin::Background : skin::Panel);
+        return reinterpret_cast<LRESULT>(id == ui::Hint ? skin::pageBrush : skin::panelBrush);
+    }
+    case WM_CTLCOLOREDIT:
+    case WM_CTLCOLORLISTBOX: {
+        const HDC dc = reinterpret_cast<HDC>(w);
+        SetTextColor(dc, skin::Green); SetBkColor(dc, skin::Input);
+        return reinterpret_cast<LRESULT>(skin::inputBrush);
+    }
+    case WM_CTLCOLORBTN:
+        return reinterpret_cast<LRESULT>(skin::panelBrush);
+    case WM_MEASUREITEM: {
+        auto item = reinterpret_cast<MEASUREITEMSTRUCT*>(l);
+        if (item && item->CtlType == ODT_LISTBOX) { item->itemHeight = Scale(23); return TRUE; }
+        break;
+    }
+    case WM_DRAWITEM:
+        if (skin::DrawControl(reinterpret_cast<const DRAWITEMSTRUCT*>(l), g_font, g_music)) return TRUE;
+        break;
     case WM_APP + 1:
-        OnScan(); Music(g_music);
-        Log(L"Ready. Deploy / Restore never force-close another application.",
-            L"工具就绪。部署和还原均不会强制关闭其他程序。");
+        if (g_preview) {
+            SetDlgItemTextW(h, ui::InstallPath, L"C:\\Program Files\\010 Editor");
+            Log(L"[PREVIEW] Documentation view - no operations executed.", L"[预览] 文档截图模式，未执行任何实际操作。");
+            Log(L"[MODULE] Terminal Pulse / 168 BPM / stereo PCM.", L"[模块] Terminal Pulse / 168 BPM / 双声道 PCM。");
+            Log(L"[READY] Deploy / launch / restore controls available in normal mode.", L"[就绪] 正常模式可使用部署、启动及还原功能。");
+            Log(L"[BACKUP] Original DLL preserved; replacement uses content verification.", L"[备份] 保留原件，替换前校验文件内容。");
+            Log(L"[AUDIO] Muted for documentation capture.", L"[音频] 文档截图期间静音。");
+            Log(L"[UI] EN / ZH switch keeps all input values.", L"[界面] 中英文切换保留全部输入值。");
+        } else {
+            OnScan(); Music(g_music);
+            Log(L"Ready. Deploy / Restore never force-close another application.",
+                L"工具就绪。部署和还原均不会强制关闭其他程序。");
+        }
         return 0;
     case WM_COMMAND:
         if (HIWORD(w) == BN_CLICKED) {
-            switch (LOWORD(w)) {
+            const int id = LOWORD(w);
+            if (g_preview && id != ui::SwitchLanguage && id != ui::Music && id != ui::Exit) return 0;
+            switch (id) {
             case ui::Scan: OnScan(); break;
             case ui::Activate: OnActivate(); break;
             case ui::Deploy: OnDeploy(); break;
@@ -344,29 +406,37 @@ static LRESULT CALLBACK WindowProc(HWND h, UINT message, WPARAM w, LPARAM l) {
             case ui::SwitchLanguage:
                 g_language = g_language == ui::Language::Chinese ? ui::Language::English : ui::Language::Chinese;
                 RefreshText(); break;
-            case ui::Music: Music(SendDlgItemMessageW(h, ui::Music, BM_GETCHECK, 0, 0) == BST_CHECKED); break;
+            case ui::Music: Music(!g_music); break;
             case ui::Exit: DestroyWindow(h); break;
             }
         }
         return 0;
     case WM_DESTROY:
-        Music(false); DeleteObject(g_font); PostQuitMessage(0); return 0;
+        Music(false); DeleteObject(g_font); skin::Destroy(); PostQuitMessage(0); return 0;
     }
     return DefWindowProcW(h, message, w, l);
 }
 int WINAPI wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show) {
     g_instance = instance;
     g_language = ui::FromLangId(GetUserDefaultUILanguage());
+    int argc{};
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLineW(), &argc);
+    for (int i = 1; argv && i < argc; ++i) {
+        if (wcscmp(argv[i], L"--preview") == 0) { g_preview = true; g_music = false; }
+        if (wcscmp(argv[i], L"--lang=en") == 0) g_language = ui::Language::English;
+        if (wcscmp(argv[i], L"--lang=zh") == 0) g_language = ui::Language::Chinese;
+    }
+    if (argv) LocalFree(argv);
     INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES};
     InitCommonControlsEx(&controls);
     WNDCLASSW cls{}; cls.lpfnWndProc = WindowProc; cls.hInstance = instance;
     cls.lpszClassName = L"010ForgeClass"; cls.hCursor = LoadCursorW(nullptr, IDC_ARROW);
     cls.hIcon = LoadIconW(instance, MAKEINTRESOURCEW(IDI_APP_ICON));
-    cls.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    cls.hbrBackground = nullptr; // Tracker skin paints the background; no white flash.
     if (!RegisterClassW(&cls)) return 1;
     g_dpi = GetDpiForSystem();
     const DWORD style = WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX;
-    RECT rect{0, 0, Scale(792), Scale(574)};
+    RECT rect{0, 0, Scale(832), Scale(660)};
     AdjustWindowRectExForDpi(&rect, style, FALSE, 0, g_dpi);
     HWND window = CreateWindowExW(0, cls.lpszClassName, L"010Forge", style, CW_USEDEFAULT, CW_USEDEFAULT,
                                  rect.right - rect.left, rect.bottom - rect.top, nullptr, nullptr, instance, nullptr);

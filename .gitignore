@@ -42,6 +42,10 @@ compile_commands.json
 *.VC.db
 CMakeUserPresets.json
 
+# Python regeneration/capture helpers
+__pycache__/
+*.py[cod]
+
 # Temporary files
 *.tmp
 *.bak

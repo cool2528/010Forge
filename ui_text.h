@@ -20,14 +20,14 @@ enum Control {
 struct Label { int id; const wchar_t* en; const wchar_t* zh; };
 inline constexpr Label Labels[] = {
     {Title, L"010Forge - 010 Editor localization utility", L"010Forge - 010 Editor 一键补丁工具"},
-    {PathLabel, L"Install directory:", L"安装目录："},
+    {PathLabel, L"Directory:", L"安装目录："},
     {NameLabel, L"User name:", L"用户名："},
-    {YearLabel, L"Expiry year:", L"到期年份："},
+    {YearLabel, L"Year:", L"到期年份："},
     {Scan, L"Auto find", L"自动查找"},
     {Activate, L"1. Activate", L"1. 一键激活"},
-    {Deploy, L"2. Deploy Chinese UI", L"2. 部署汉化"},
+    {Deploy, L"2. Deploy", L"2. 部署汉化"},
     {Launch, L"3. Launch", L"3. 启动"},
-    {Restore, L"4. Restore original", L"4. 还原原版"},
+    {Restore, L"4. Restore", L"4. 还原原版"},
     {Status, L"Check status", L"查看状态"},
     {Music, L"Music", L"背景音乐"},
     {SwitchLanguage, L"Language: EN", L"语言：中文"},

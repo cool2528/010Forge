@@ -1,5 +1,13 @@
 # Changelog / 更新记录
 
+## 4.1.0 / Tracker Edition
+
+- Keep the original **B / Terminal Pulse** score and voices; accelerate 148 → **168 BPM** (11.43-second stereo loop).
+- Dark Tracker-style GDI theme with monospaced type, green event console, cyan borders and amber Restore action.
+- Retain the music toggle, all five action buttons and input-preserving EN/ZH switching.
+- Replace historical GUI documentation images with current EN/ZH preview window captures.
+- Private-desktop capture checks control bounds, equal button sizes and DPI-correct bitmap coordinates; no user desktop or audio interaction.
+
 ## 4.0.0
 
 ### Added / 新增

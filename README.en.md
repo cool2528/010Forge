@@ -1,26 +1,35 @@
-# 010Forge v4.0
+# 010Forge v4.1
 
 **A single-file Win32 GUI utility for 010 Editor 17.0.1 x64.**
 
 [简体中文](README.md) | **English**
 
-## What changed in v4.0
+## What changed in v4.1
 
 - **Deploy installs automatic localization**: validates the supported installation, backs up the original `quazip.dll`, then installs the embedded proxy. Desktop shortcuts, file associations and direct EXE launches use the same installation.
 - **Restore original**: verifies `quazip_orig.dll` before restoring. The verified backup, existing license and personal settings are preserved. Missing or non-PE damaged current DLLs can also be recovered.
 - **One EXE to distribute**: the proxy DLL, icon and original background music are embedded. No extra `zhcn.dll` or launcher is required.
-- **New original music**: *Grid After Midnight*, a 19.2-second dark cyber-electronic loop with synth bass, mechanical drums and metallic arpeggios. Music can be disabled at any time and stops on exit.
+- **Music**: the original B *Terminal Pulse* score and voices, accelerated from 148 to **168 BPM**, with an **11.43-second stereo loop**. Toggle playback at any time; it stops on exit.
+- **Tracker skin**: dark scanlines, monospaced type, phosphor-green logs, cyan pixel borders and an amber Restore button. Both languages and five equally sized action buttons remain available.
 - **Aligned bilingual controls**: Chinese Windows UI languages select simplified Chinese; other languages select English. Manual switching preserves the entered path, name and year. Five action buttons use equal sizes and stable control IDs.
 - **Verified file transactions**: SHA-256 content identity, staged writes and atomic replacement. No size-only detection, delete-first restore, or forced process termination.
 - **Source-built embedded payload**: CMake builds the proxy before embedding it, and recompiles resources when the DLL, WAV or icon changes. Build outputs remain outside the source tree.
 
 ## Preview
 
-These are actual screenshots from earlier versions showing localization results. The historical tool screenshot does not show the new v4.0 Restore button.
+The utility images show the current real EN/ZH windows rendered on a private desktop using `--preview`. The capture mode does not examine a real installation or license, deploy files, or play audio. The 010 Editor images remain earlier observed application results.
+
+### English utility / Tracker skin
+
+![010Forge English Tracker interface](images/gui-tool-en.png)
+
+### Chinese utility / Tracker skin
+
+![010Forge Chinese Tracker interface](images/gui-tool-zh.png)
+
+### Localized 010 Editor
 
 ![Localized 010 Editor](images/localized-ui.png)
-
-![Historical utility GUI](images/gui-tool.png)
 
 ![Example of stored application status](images/licensed-about.png)
 
@@ -32,7 +41,7 @@ These are actual screenshots from earlier versions showing localization results.
 4. **3. Launch**: starts `010Editor.exe` directly. Existing desktop shortcuts work too; no remote-thread injector or resident launcher is needed.
 5. **4. Restore original**: close 010 Editor, then click Restore. Only `quazip.dll` is restored; the license and settings are untouched. Already-original installations remain unchanged.
 6. **Check status**: shows file/backup verification results and the stored name. Process creation is not presented as proof of a verified localized UI.
-7. **Music** toggles playback; **Language** switches the utility UI.
+7. **Music** toggles playback (`[x]` playing / `[ ]` muted); **Language** switches the utility UI.
 
 Locked files produce an error asking you to save and close the application. No `taskkill /F` is used. If the installation directory is not writable, manually run this utility as administrator. The old `.bat` deployment scripts were removed so they cannot bypass verification and transactional restore.
 
@@ -91,16 +100,26 @@ The original WAV is committed, so ordinary CMake/CI builds require no Python. To
 python gen_assets.py --music-only
 ```
 
-Only the Python standard library is needed, with a fixed seed for reproducibility. Pillow is required only when regenerating the icon. The music contains no copied movie soundtrack or samples.
+Regenerating the music requires NumPy and uses a fixed seed. Normal CMake/CI builds embed the generated WAV directly and need no Python. Pillow is needed only to regenerate the icon.
 
-## GitHub Actions and v4.0
+### Regenerate documentation screenshots
+
+```console
+cmake -S . -B build -DFORGE_BUILD_UI_CAPTURE=ON
+cmake --build build
+build\bin\forge_capture_ui.exe build\bin\010Forge.exe dist\ui-captures
+```
+
+The helper creates a private desktop and starts only the utility's `--preview --lang=en/zh` windows. `PrintWindow` captures BMPs without copying the user's screen. Convert those BMPs to PNG for `images/gui-tool-en.png` and `images/gui-tool-zh.png`. Checks include contained controls, an aligned action row and input-preserving language switching.
+
+## GitHub Actions and v4.1
 
 Pushes to `main`, PRs and manual runs build, test and upload an Actions artifact without publishing a Release. A pushed `v*` tag runs the same tests, then publishes a ZIP and SHA-256 file.
 
 ```console
 git push origin main
-git tag -a v4.0 -m "010Forge v4.0"
-git push origin v4.0
+git tag -a v4.1 -m "010Forge v4.1"
+git push origin v4.1
 ```
 
 Use a fresh version tag instead of overwriting published tags. ZIPs include the EXE, both READMEs, CHANGELOG and all linked screenshots for offline viewing.

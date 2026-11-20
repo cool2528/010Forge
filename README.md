@@ -1,30 +1,35 @@
-# 010Forge v4.0
+# 010Forge v4.1
 
 **010 Editor 17.0.1 x64 的单文件 Win32 GUI 工具。**
 
 **简体中文** | [English](README.en.md)
 
-## v4.0 改动
+## v4.1 改动
 
 - **「部署汉化」真正安装自动加载代理**：校验安装版本 → 备份原 `quazip.dll` → 安装 EXE 内嵌的代理。从桌面快捷方式、文件关联或原 EXE 启动均加载汉化。
 - **「还原原版」**：校验 `quazip_orig.dll`，恢复原版 DLL，保留备份、现有许可证和个人设置。当前 DLL 缺失或非 PE 损坏时也有恢复路径。
 - **单个 EXE 分发**：内嵌 quazip 代理、图标、原创背景音乐。无需额外带 `zhcn.dll` 或启动器。
-- **背景音乐升级**：原创《Grid After Midnight》，19.2 秒循环，暗色赛博电子氛围、低频贝斯、机械鼓点与金属琶音。右上角可随时关闭，退出即停止。
+- **背景音乐**：采用原 B《Terminal Pulse》编曲和音色，148 → **168 BPM**，约 **11.43 秒立体声循环**。右上角「背景音乐」按钮可随时开关，退出即停止。
+- **Tracker 界面**：深色扫描线背景、等宽字体、荧绿色终端日志、青色像素边框和琥珀色还原按钮，保留中英文切换与五个等宽功能按钮。
 - **GUI 对齐与双语**：按系统界面语言选择简体中文或英文，提供手动切换；切换时保留用户名、路径和年份。五个功能按钮等宽对齐。
 - **可靠文件事务**：SHA-256 内容校验，先写临时文件再替换，不按文件大小猜测版本，不先删除当前 DLL，不强制结束进程。
 - **源码构建**：CMake 自动编译代理 DLL 再嵌入 EXE；代理、图标或音乐变化会触发资源重编译。所有构建产物留在构建目录。
 
 ## 界面预览
 
-以下是已有版本的实际界面截图，用于展示汉化效果；历史 GUI 截图不是 v4.0 新增还原按钮的画面。
+工具截图是当前构建的真实中英文窗口：在隔离桌面通过 `--preview` 渲染和截取，不访问真实安装或许可证，也不执行部署、播放音乐。010 Editor 本体效果图仍保留已有实测截图。
+
+### 工具界面（简体中文 / Tracker 主题）
+
+![010Forge 中文 Tracker 界面](images/gui-tool-zh.png)
+
+### Tool interface (English / Tracker skin)
+
+![010Forge English Tracker interface](images/gui-tool-en.png)
 
 ### 010 Editor 汉化效果
 
 ![010 Editor 汉化界面](images/localized-ui.png)
-
-### 工具界面（历史版本）
-
-![010Forge 工具历史界面](images/gui-tool.png)
 
 ### 已存储的授权状态示例
 
@@ -38,7 +43,7 @@
 4. **3. 启动**：直接启动该目录的 `010Editor.exe`；也可继续使用原桌面快捷方式。无需远程线程注入或常驻启动器。
 5. **4. 还原原版**：关闭 010 Editor 后点击。只还原 `quazip.dll`，不删除许可证和配置文件。已是原版时不重复修改。
 6. **查看状态**：显示代理/备份的内容校验结果和已存储名称；不把“进程已创建”误报为“界面已验证”。
-7. **背景音乐**复选框开关音乐；**语言**按钮切换工具的中英文界面。
+7. **背景音乐**按钮开关音乐（`[x]` 表示播放、`[ ]` 表示静音）；**语言**按钮切换工具的中英文界面。
 
 文件占用时会提示保存并关闭软件，不会使用 `taskkill /F`。安装目录写入权限不足时，可手动以管理员身份运行。旧的 `.bat` 部署脚本已移除，避免绕过 GUI 的校验和还原事务。
 
@@ -97,16 +102,26 @@ CMake 将代理编译到 `build/resources/quazip.dll`，再嵌入 EXE；多配�
 python gen_assets.py --music-only
 ```
 
-仅使用 Python 标准库，固定随机种子以便复现。重新生成图标才需要 Pillow。音乐不是电影配乐的复制或采样。
+重新生成音乐需要 NumPy，使用固定随机种子以便复现；正常 CMake/CI 构建直接嵌入已生成 WAV，不需要 Python。重新生成图标才需要 Pillow。
 
-## GitHub Actions 与 v4.0 发布
+### 重建文档截图
+
+```console
+cmake -S . -B build -DFORGE_BUILD_UI_CAPTURE=ON
+cmake --build build
+build\bin\forge_capture_ui.exe build\bin\010Forge.exe dist\ui-captures
+```
+
+辅助工具在隔离桌面启动工具自己的 `--preview --lang=en/zh` 窗口，通过 `PrintWindow` 输出 BMP；转换为 PNG 后更新 `images/gui-tool-en.png`、`images/gui-tool-zh.png`。它也核验所有控件位于窗口内、五个按钮对齐及语言切换保留输入。
+
+## GitHub Actions 与 v4.1 发布
 
 推送 `main`、PR 或手动运行：构建、测试、打包并上传 Actions artifact，**不发布 Release**。推送 `v*` 标签：同一套测试通过后发布 Release，附 ZIP 和 SHA-256 文件。
 
 ```console
 git push origin main
-git tag -a v4.0 -m "010Forge v4.0"
-git push origin v4.0
+git tag -a v4.1 -m "010Forge v4.1"
+git push origin v4.1
 ```
 
 请使用新版本标签；不覆盖已发布标签。ZIP 包含 EXE、两份 README、CHANGELOG 和所有 README 配图，可离线查看。
